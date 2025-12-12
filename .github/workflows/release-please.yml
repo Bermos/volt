@@ -1,0 +1,57 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    
+    steps:
+      - name: Run Release Please
+        uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # Run additional checks when a release is created
+  post-release:
+    name: Post Release
+    runs-on: ubuntu-latest
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Verify release builds
+        run: go build -v ./...
+
+      - name: Update Go module proxy
+        run: |
+          VERSION="${{ needs.release-please.outputs.tag_name }}"
+          curl -s "https://proxy.golang.org/github.com/${{ github.repository }}/@v/${VERSION}.info" || true
+          echo "✅ Requested Go proxy update for $VERSION"
+
+      - name: Notify release
+        run: |
+          echo "🎉 Released version ${{ needs.release-please.outputs.version }}"
+          echo "📦 Tag: ${{ needs.release-please.outputs.tag_name }}"

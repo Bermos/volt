@@ -1,0 +1,141 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., v1.0.0)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Is this a pre-release?'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for changelog generation
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Run tests
+        run: go test -v -race ./...
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Releasing version: $VERSION"
+
+      - name: Validate version format
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "Error: Version '$VERSION' does not match semver format (vX.Y.Z or vX.Y.Z-prerelease)"
+            exit 1
+          fi
+
+      - name: Get previous tag
+        id: previous_tag
+        run: |
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          echo "previous_tag=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
+          echo "Previous tag: $PREVIOUS_TAG"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          PREVIOUS_TAG="${{ steps.previous_tag.outputs.previous_tag }}"
+          
+          # Create changelog file
+          echo "# Changelog for $VERSION" > CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "## What's Changed" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          
+          if [ -n "$PREVIOUS_TAG" ]; then
+            RANGE="${PREVIOUS_TAG}..HEAD"
+          else
+            RANGE="HEAD"
+          fi
+          
+          # Group commits by type (conventional commits)
+          echo "### 🚀 Features" >> CHANGELOG.md
+          git log $RANGE --pretty=format:"- %s (%h)" --grep="^feat" -- || true
+          echo "" >> CHANGELOG.md
+          
+          echo "### 🐛 Bug Fixes" >> CHANGELOG.md
+          git log $RANGE --pretty=format:"- %s (%h)" --grep="^fix" -- || true
+          echo "" >> CHANGELOG.md
+          
+          echo "### 📚 Documentation" >> CHANGELOG.md
+          git log $RANGE --pretty=format:"- %s (%h)" --grep="^docs" -- || true
+          echo "" >> CHANGELOG.md
+          
+          echo "### 🧪 Tests" >> CHANGELOG.md
+          git log $RANGE --pretty=format:"- %s (%h)" --grep="^test" -- || true
+          echo "" >> CHANGELOG.md
+          
+          echo "### 🔧 Maintenance" >> CHANGELOG.md
+          git log $RANGE --pretty=format:"- %s (%h)" --grep="^chore\|^refactor\|^ci" -- || true
+          echo "" >> CHANGELOG.md
+          
+          echo "### 📝 Other Changes" >> CHANGELOG.md
+          git log $RANGE --pretty=format:"- %s (%h)" --invert-grep --grep="^feat\|^fix\|^docs\|^test\|^chore\|^refactor\|^ci" -- || true
+          echo "" >> CHANGELOG.md
+          
+          # Add contributors
+          echo "## Contributors" >> CHANGELOG.md
+          git log $RANGE --pretty=format:"- @%an" | sort | uniq >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          
+          # Add compare link
+          if [ -n "$PREVIOUS_TAG" ]; then
+            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREVIOUS_TAG}...$VERSION" >> CHANGELOG.md
+          fi
+          
+          cat CHANGELOG.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
+          body_path: CHANGELOG.md
+          draft: false
+          prerelease: ${{ inputs.prerelease || contains(steps.version.outputs.version, '-') }}
+          generate_release_notes: true  # Also include GitHub's auto-generated notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Go package index
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # Trigger Go proxy to fetch the new version
+          curl -s "https://proxy.golang.org/github.com/${{ github.repository }}/@v/${VERSION}.info" || true
+          echo "Requested Go proxy update for $VERSION"
