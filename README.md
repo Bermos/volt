@@ -18,7 +18,7 @@ package main
 
 import (
     "context"
-    "github.com/yourorg/volt"
+    "github.com/bermos/volt"
 )
 
 type GreetInput struct {

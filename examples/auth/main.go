@@ -105,7 +105,7 @@ func simpleRoleExample() {
 }
 
 // =============================================================================
-// Example 3: Resource-Based RBAC (werkverzeichnis-style)
+// Example 3: Resource-Based RBAC
 // =============================================================================
 
 // For apps where permissions are per-resource (collections, workspaces, etc.)
